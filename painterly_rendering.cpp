@@ -1,3 +1,5 @@
+// Compilation: g++ -std=c++11 painterly_rendering.cpp -o painterly_rendering `pkg-config --cflags --libs opencv`
+
 #include <cv.h>
 #include <highgui.h>
 #include <iostream>
@@ -5,10 +7,12 @@
 #include <vector>
 #include <limits>
 #include <algorithm>
+#include <string> 
 
 using namespace cv;
 using namespace std;
 
+/**** SET DEFAULT VALUE(IMPRESSIONIST) ****/
 int T = 100; // Approximation threshold
 float f_s = 0.5f; // f sigma, blur factor 
 int maxRadius = 8; // Maximum Radius
@@ -17,7 +21,15 @@ float a = 1.0f; // Opacity
 float f_g = 1.0f; // Grid Size
 int minLength = 4; // Minimum stroke lengths 
 int maxLength = 16; // Maximum stroke lengths
+float j_h = 0.0f; // Color jitter factor H
+float j_s = 0.0f; // Color jitter factor S
+float j_v = 0.0f; // Color jitter factor V
+float j_r = 0.0f; // Color jitter factor R
+float j_g = 0.0f; // Color jitter factor G
+float j_b = 0.0f; // Color jitter factor B
 
+vector<Point> sobel_vec;
+int style;
 // const float SobelMatrixX[]={
 //         1.0f, 0.0f, -1.0f,
 //         2.0f, 0.0f , -2.0f,
@@ -29,7 +41,34 @@ int maxLength = 16; // Maximum stroke lengths
 //         0.0f, 0.0f, 0.0f,
 //         -1.0f, -2.0f, -1.0f	
 // };
-vector<Point> sobel_vec;
+
+void setStyle(){
+    if(style==0) // type 0 = default (impressionist)
+        return;
+    if(style==1){ // type 1 = Expressionist
+        T = 50;
+        f_c = 0.25f;
+        a = 0.7f;
+        minLength = 16;
+        j_v = 0.5f;
+    }
+    else if(style==2){ // type 2 = Colorist Wash
+        T = 200;
+        a = 0.5f;
+        j_r = 0.3f;
+        j_g = 0.3f;
+        j_b = 0.3f;
+    }
+    else if(style==3){ // type 3 = Pointillist
+        T = 100;
+        maxRadius = 4;
+        f_g = 0.5f;
+        minLength = 0;
+        maxLength = 0;
+        j_v = 1.0f;
+        j_h = 0.3f;
+    }
+}
 
 float gradientMag(int x,int y, int width){
 	Point G=sobel_vec[y*width+x];
@@ -99,7 +138,11 @@ float colorabsDiff(Vec3b a, Vec3b b){
 }
 
 // get the euclidean distance at point (i,j)
-float pointDiff(int i,int j, Mat Diff){
+float pointDiff(int i,int j, Mat Diff, Mat paintArea){
+    // check whether this point has been painted or not
+    if(paintArea.at<Vec3b>(j,i)==Vec3b(0,0,0)){
+        return numeric_limits<float>::max();
+    }
     Vec3b diff = Diff.at<Vec3b>(j, i);
     uchar diff_b = diff.val[0];
     uchar diff_g = diff.val[1];
@@ -107,14 +150,79 @@ float pointDiff(int i,int j, Mat Diff){
     return (float)sqrt((double)(diff_b*diff_b+diff_g*diff_g+diff_r*diff_r));
 }
 
-vector<Point> makeSplineStroke(Point p0,int R, Mat refImage, Mat Diff){
-    Vec3b strokeColor = refImage.at<Vec3b>(p0);
+void paintStroke(Mat canvas,Mat paintArea,vector<Point> K,Vec3b strokeColor, int R){
+    if(K.size()==1){ // if there is one point in K, then draw a point
+        Mat temp_c = canvas.clone();
+        circle(temp_c, K[0], cvRound((double)R/2.0), Scalar(Vec3b(strokeColor)), -1);
+        addWeighted(temp_c,a,canvas,1-a,0,canvas); // alpha blending because openCV polylines does not support alpha channel
+        circle(paintArea, K[0], cvRound((double)R/2.0), Scalar(Vec3b(255,255,255)), -1); // paint white stroke onto paintArea
+    }
+    else{
+        Mat temp_c = canvas.clone();
+        polylines(temp_c, K, false, Scalar(Vec3b(strokeColor)), R, CV_AA);
+        addWeighted(temp_c,a,canvas,1-a,0,canvas); // alpha blending because openCV polylines does not support alpha channel
+        polylines(paintArea, K, false, Scalar(Vec3b(255,255,255)), R, CV_AA); // paint white stroke onto paintArea
+    }
+}
+
+Vec3b setStrokeColor(Vec3b originalColor){
+    Vec3b jColor(originalColor);
+    float random;
+    if(style == 0)
+        return jColor;
+    if(style == 1 || style == 3){ // HSV jitter
+        Mat3b bgr(jColor);
+        Mat3b hsv;
+        cvtColor(bgr,hsv,CV_BGR2HSV);
+        int h = hsv.at<uchar>(0);
+        int s = hsv.at<uchar>(1);
+        int v = hsv.at<uchar>(2);
+        random = ((float) rand()) / (float) RAND_MAX;
+        h += (int)((random-0.5f)*j_h*255);
+        h = h<0?0:h;
+        h = h>255?255:h;
+        random = ((float) rand()) / (float) RAND_MAX;
+        s += (int)((random-0.5f)*j_s*255);
+        s = s<0?0:s;
+        s = s>255?255:s;
+        random = ((float) rand()) / (float) RAND_MAX;
+        v += (int)((random-0.5f)*j_v*255);
+        v = v<0?0:v;
+        v = v>255?255:v;
+        Mat3b jhsv(Vec3b(h,s,v));
+        Mat3b jbgr;
+        cvtColor(jhsv,jbgr,CV_HSV2BGR);
+        jColor = jbgr.at<Vec3b>(0);
+    }
+    if(style == 2){ // RGB jitter
+        int b=jColor.val[0];
+        int g=jColor.val[1];
+        int r=jColor.val[2];
+        random = ((float) rand()) / (float) RAND_MAX;
+        b += (int)((random-0.5f)*j_b*255);
+        b = b<0?0:b;
+        b = b>255?255:b;
+        random = ((float) rand()) / (float) RAND_MAX;
+        g += (int)((random-0.5f)*j_g*255);
+        g = g<0?0:g;
+        g = g>255?255:g;
+        random = ((float) rand()) / (float) RAND_MAX;
+        r += (int)((random-0.5f)*j_r*255);
+        r = r<0?0:r;
+        r = r>255?255:r;
+        jColor = Vec3b(b,g,r);
+    }
+    return jColor;
+}
+
+void makeSplineStroke(Mat canvas,Point p0,int R, Mat refImage, Mat Diff, Mat paintArea){
+    Vec3b strokeColor = setStrokeColor(refImage.at<Vec3b>(p0));
     vector<Point> K; //a new stroke with radius R and color strokeColor
     K.push_back(p0); 
     Point point = p0;
     Point2f lastD(0.0,0.0);
     for(int i=1; i<maxLength; i++){
-        if(i>minLength && pointDiff(point.x,point.y,Diff)<colorabsDiff(refImage.at<Vec3b>(point),strokeColor))
+        if(i>minLength && pointDiff(point.x,point.y,Diff,paintArea)<colorabsDiff(refImage.at<Vec3b>(point),strokeColor))
             break;
         if(gradientMag(point.x,point.y,refImage.cols)==0)
             break;
@@ -139,11 +247,13 @@ vector<Point> makeSplineStroke(Point p0,int R, Mat refImage, Mat Diff){
         lastD.x=delta.x;
         lastD.y=delta.y;
         K.push_back(point);
-        return K;
     }
+    paintStroke(canvas,paintArea,K,strokeColor,R); // paint stroke onto canvas, and record drawn pixel with white color
+    // paintStroke(paintArea,K,Vec3b(255,255,255),R); 
 }
 
-void paintLayer(Mat canvas,Mat refImage,int brushRadius){
+
+void paintLayer(Mat canvas,Mat refImage,int brushRadius,Mat paintArea){
     vector<Point> S; // set of Strokes
     int grid=round(brushRadius*f_g); //grid size
     Mat Diff; // difference image
@@ -160,7 +270,7 @@ void paintLayer(Mat canvas,Mat refImage,int brushRadius){
                     int j=(y2<0)?0:y2;
                     i=(i>=canvas.cols)?canvas.cols-1:i;
                     j=(j>=canvas.rows)?canvas.rows-1:j;
-                    float err = pointDiff(i,j,Diff);
+                    float err = pointDiff(i,j,Diff,paintArea);
                     if(err>largestError){
                         largestError=err;
                         largestX=i;
@@ -179,8 +289,7 @@ void paintLayer(Mat canvas,Mat refImage,int brushRadius){
     while(S.size()!=0){
         Point p0 = S.back();
         S.pop_back();
-        vector<Point> K = makeSplineStroke(p0,brushRadius,refImage,Diff);
-        // paintStroke(canvas,K);
+        makeSplineStroke(canvas,p0,brushRadius,refImage,Diff,paintArea);
     }
 }
 
@@ -218,6 +327,7 @@ void paintLayer(Mat canvas,Mat refImage,int brushRadius){
 void Paint(Mat src){
     Mat refImage(src.rows, src.cols, CV_8UC3, Scalar(255,255,255));
     Mat canvas(src.rows, src.cols, CV_8UC3, Scalar(255,255,255));
+    Mat paintArea(src.rows, src.cols, CV_8UC3, Scalar(0,0,0));  //record whether paint or not just using black/white color
     // Point sobelvector[src.rows*src.cols];
     sobel_vec.resize(src.rows*src.cols);
     for(int Ri=maxRadius; Ri>1; Ri/=2){
@@ -231,15 +341,16 @@ void Paint(Mat src){
         //     }
         // }
         // imwrite("sobtest.jpg", sobImage);
-        paintLayer(canvas,refImage,Ri);
+        paintLayer(canvas,refImage,Ri,paintArea);
     }
+    imwrite("final_"+to_string(style)+".jpg", canvas);
 }  
 
 int main( int argc, char** argv )
 {
-    if( argc != 2)
+    if( argc != 3)
     {
-     cout <<" Usage: painterly_rendering <image_file>" << endl;
+     cout <<" Usage: painterly_rendering <image_file> <paint_style:0~3>" << endl;
      return -1;
     }
 
@@ -251,7 +362,8 @@ int main( int argc, char** argv )
         cout <<  "Could not open or find the image" << std::endl ;
         return -1;
     }
-
+    style = atoi(argv[2]);
+    setStyle();
     Paint(image);
 
     return 0;
