@@ -159,9 +159,9 @@ void paintStroke(Mat canvas,Mat paintArea,vector<Point> K,Vec3b strokeColor, int
     }
     else{
         Mat temp_c = canvas.clone();
-        polylines(temp_c, K, false, Scalar(Vec3b(strokeColor)), R, CV_AA);
+        polylines(temp_c, K, false, Scalar(Vec3b(strokeColor)), R);
         addWeighted(temp_c,a,canvas,1-a,0,canvas); // alpha blending because openCV polylines does not support alpha channel
-        polylines(paintArea, K, false, Scalar(Vec3b(255,255,255)), R, CV_AA); // paint white stroke onto paintArea
+        polylines(paintArea, K, false, Scalar(Vec3b(255,255,255)), R); // paint white stroke onto paintArea
     }
 }
 
@@ -239,8 +239,8 @@ void makeSplineStroke(Mat canvas,Point p0,int R, Mat refImage, Mat Diff, Mat pai
         float temp=(float)sqrt((double)delta.x*delta.x+delta.y*delta.y);
         delta.x=delta.x/temp;
         delta.y=delta.y/temp;
-        point.x=(int)(point.x+R*delta.x);
-        point.y=(int)(point.y+R*delta.y);
+        point.x=(int)round(point.x+R*delta.x);
+        point.y=(int)round(point.y+R*delta.y);
         if (point.x<0||point.x>=refImage.cols||point.y<0||point.y>=refImage.rows) {
             break;
         }
@@ -249,7 +249,6 @@ void makeSplineStroke(Mat canvas,Point p0,int R, Mat refImage, Mat Diff, Mat pai
         K.push_back(point);
     }
     paintStroke(canvas,paintArea,K,strokeColor,R); // paint stroke onto canvas, and record drawn pixel with white color
-    // paintStroke(paintArea,K,Vec3b(255,255,255),R); 
 }
 
 
@@ -331,6 +330,7 @@ void Paint(Mat src){
     // Point sobelvector[src.rows*src.cols];
     sobel_vec.resize(src.rows*src.cols);
     for(int Ri=maxRadius; Ri>1; Ri/=2){
+        // imwrite("final_"+to_string(style)+"_layer_"+to_string(Ri)+".jpg", canvas);
         GaussianBlur(src, refImage, Size(0,0), Ri*f_s, Ri*f_s);
         calculateSobelVectors(refImage);
         // Mat sobImage(src.rows, src.cols, CV_8UC1);
