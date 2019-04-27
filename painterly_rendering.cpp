@@ -8,9 +8,13 @@
 #include <limits>
 #include <algorithm>
 #include <string> 
+#include "utils.h"
+#include <omp.h>
 
 using namespace cv;
 using namespace std;
+
+#define M_PI 3.14159265358979323846
 
 /**** SET DEFAULT VALUE(IMPRESSIONIST) ****/
 int T = 100; // Approximation threshold
@@ -27,9 +31,11 @@ float j_v = 0.0f; // Color jitter factor V
 float j_r = 0.0f; // Color jitter factor R
 float j_g = 0.0f; // Color jitter factor G
 float j_b = 0.0f; // Color jitter factor B
-
+Mat GKernel;
 vector<Point> sobel_vec;
 int style;
+Timer t;
+vector<double> times;
 // const float SobelMatrixX[]={
 //         1.0f, 0.0f, -1.0f,
 //         2.0f, 0.0f , -2.0f,
@@ -83,7 +89,7 @@ Point2f gradientDirection(int x,int y, int width){
     return direction;
 }
 
-int xGradient(Mat image, int x, int y)
+/*int xGradient(Mat image, int x, int y)
 {
     return  image.at<uchar>(y-1, x-1) +
             2*image.at<uchar>(y, x-1) +
@@ -101,31 +107,105 @@ int yGradient(Mat image, int x, int y)
             image.at<uchar>(y+1, x-1) -
             2*image.at<uchar>(y+1, x) -
             image.at<uchar>(y+1, x+1);
+}*/
+Point Gradient(Mat image, int x, int y) {
+    Point v;
+    v.x =  image.at<uchar>(y-1, x-1) + 2*image.at<uchar>(y, x-1) + image.at<uchar>(y+1, x-1) 
+            - image.at<uchar>(y-1, x+1) - 2*image.at<uchar>(y, x+1) - image.at<uchar>(y+1, x+1); 
+    v.y = image.at<uchar>(y-1, x-1) + 2*image.at<uchar>(y-1, x) + image.at<uchar>(y-1, x+1) 
+            - image.at<uchar>(y+1, x-1) - 2*image.at<uchar>(y+1, x) - image.at<uchar>(y+1, x+1);
+    return v;
 }
-
 void calculateSobelVectors(Mat ref){
     int gx, gy, sum;
 
     Mat ref_grey;
     cvtColor( ref, ref_grey, CV_BGR2GRAY );
-
-    Point v;
-    for(int y = 0; y < ref_grey.rows; y++){
+#if 0
+    #pragma omp parallel
+    {
+        Point v;
+        #pragma omp for nowait
         for(int x = 0; x < ref_grey.cols; x++){
             v.x=0;
             v.y=0;
-            sobel_vec[y*ref.cols+x]=v;
+            sobel_vec[x]=v;
+            sobel_vec[(ref_grey.rows-1)*ref.cols+x]=v;
+        }
+        #pragma omp for nowait
+        for(int y = 0; y < ref_grey.rows; y++){
+            v.x=0;
+            v.y=0;
+            sobel_vec[y*ref.cols]=v;
+            sobel_vec[y*ref.cols+(ref_grey.cols-1)]=v;
+        }
+        #pragma omp for collapse(2)   
+        for(int y = 1; y < ref_grey.rows - 1; y++){
+            for(int x = 1; x < ref_grey.cols - 1; x++){
+               /* gx = xGradient(ref_grey, x, y);
+                v.x=gx;
+                gy = yGradient(ref_grey, x, y);
+                v.y=gy;*/
+                sobel_vec[y*ref.cols+x]=Gradient(ref_grey, x, y);
+            }
         }
     }
-
+#endif
+    Point v;
+    for(int x = 0; x < ref_grey.cols; x++){
+        v.x=0;
+        v.y=0;
+        sobel_vec[x]=v;
+        sobel_vec[(ref_grey.rows-1)*ref.cols+x]=v;
+    }
+    for(int y = 0; y < ref_grey.rows; y++){
+        v.x=0;
+        v.y=0;
+        sobel_vec[y*ref.cols]=v;
+        sobel_vec[y*ref.cols+(ref_grey.cols-1)]=v;
+    }
     for(int y = 1; y < ref_grey.rows - 1; y++){
         for(int x = 1; x < ref_grey.cols - 1; x++){
-            gx = xGradient(ref_grey, x, y);
-            v.x=gx;
-            gy = yGradient(ref_grey, x, y);
-            v.y=gy;
-            sobel_vec[y*ref.cols+x]=v;
+            sobel_vec[y*ref.cols+x]=Gradient(ref_grey, x, y);
         }
+    }
+}
+void generateGaussian(double sigma) {
+    GKernel = Mat::zeros(5, 5, CV_64F);
+    double sum = 0.0, s = 2.0*sigma*sigma;
+    //cout<<sigma<<":"<<endl;
+    for (int x = -2; x <= 2; x++) { 
+        for (int y = -2; y <= 2; y++) {
+            double value = (exp(-(x*x+y*y) / s)) / (M_PI * s);
+            GKernel.at<double>(x+2,y+2) =  value;
+            sum+=value;
+        } 
+    } 
+    for(int x=0; x<5; x++) {
+        for(int y=0; y<5; y++) {
+            GKernel.at<double>(x,y) = (GKernel.at<double>(x,y)/sum); 
+        }
+    }
+}
+/*void GaussianBlur_serial(Mat src, Mat dst) {
+    filter2D(src, dst, -1 , GKernel);
+}*/
+void GaussianBlur_parallel(Mat src, Mat dst) {
+   #pragma omp parallel for collapse(2) 
+    for(int x = 0; x < src.rows; x++) {
+        for( int y = 0; y < src.cols; y++) {
+            double pix[3] = { 0, 0, 0 };
+            for(int i=-2;i<=2;i++){
+                for(int j=-2;j<=2;j++){
+                    if(x+i<0 || x+i >=src.rows || y+j<0 || y+j>=src.cols)   continue;
+                    Vec3b intensity = src.at<Vec3b>(x+i,y+j);
+                    pix[0] += ((double)intensity[0])*GKernel.at<double>(i+2,j+2);
+                    pix[1] += ((double)intensity[1])*GKernel.at<double>(i+2,j+2);
+                    pix[2] += ((double)intensity[2])*GKernel.at<double>(i+2,j+2);
+                }
+            }
+            dst.at<Vec3b>(x,y) = { (uchar)pix[0], (uchar)pix[1], (uchar)pix[2] };
+        } 
     }
 }
 
@@ -216,13 +296,14 @@ Vec3b setStrokeColor(Vec3b originalColor){
 }
 
 void makeSplineStroke(Mat canvas,Point p0,int R, Mat refImage, Mat Diff, Mat paintArea){
+    t.tic();
     Vec3b strokeColor = setStrokeColor(refImage.at<Vec3b>(p0));
     vector<Point> K; //a new stroke with radius R and color strokeColor
     K.push_back(p0); 
     Point point = p0;
     Point2f lastD(0.0,0.0);
     for(int i=1; i<maxLength; i++){
-        if(i>minLength && pointDiff(point.x,point.y,Diff,paintArea)<colorabsDiff(refImage.at<Vec3b>(point),strokeColor))
+        if(i>minLength && pointDiff(point.x,point.y,Diff,paintArea)<colorabsDiff(refImage.at<Vec3b>(point),strokeColor)) 
             break;
         if(gradientMag(point.x,point.y,refImage.cols)==0)
             break;
@@ -248,15 +329,25 @@ void makeSplineStroke(Mat canvas,Point p0,int R, Mat refImage, Mat Diff, Mat pai
         lastD.y=delta.y;
         K.push_back(point);
     }
+    if(times.size() < 5)    
+        times.push_back(t.toc());   //times[4]
+    else
+        times[4] += t.toc();
+    t.tic();
     paintStroke(canvas,paintArea,K,strokeColor,R); // paint stroke onto canvas, and record drawn pixel with white color
+    if(times.size() < 6)    
+        times.push_back(t.toc());   //times[5]
+    else
+        times[5] += t.toc();
 }
-
-
 void paintLayer(Mat canvas,Mat refImage,int brushRadius,Mat paintArea){
     vector<Point> S; // set of Strokes
     int grid=round(brushRadius*f_g); //grid size
     Mat Diff; // difference image
+    t.tic();
     absdiff(canvas,refImage,Diff);
+    times.push_back(t.toc());   //times[2]
+    t.tic();
     for(int x=0;x<canvas.cols;x+=grid){
         for(int y=0;y<canvas.rows;y+=grid){
             float largestError = numeric_limits<float>::min();
@@ -285,6 +376,8 @@ void paintLayer(Mat canvas,Mat refImage,int brushRadius,Mat paintArea){
         }
     }
     random_shuffle(S.begin(),S.end()); // shuffle all strokes to random order
+    times.push_back(t.toc());   //times[3]
+    printf("stroke count %d ", S.size());
     while(S.size()!=0){
         Point p0 = S.back();
         S.pop_back();
@@ -331,8 +424,15 @@ void Paint(Mat src){
     sobel_vec.resize(src.rows*src.cols);
     for(int Ri=maxRadius; Ri>1; Ri/=2){
         // imwrite("final_"+to_string(style)+"_layer_"+to_string(Ri)+".jpg", canvas);
-        GaussianBlur(src, refImage, Size(0,0), Ri*f_s, Ri*f_s);
+        //GaussianBlur(src, refImage, Size(5,5), Ri*f_s, Ri*f_s);
+		//GaussianBlur_serial(src, refImage);
+        generateGaussian(Ri*f_s);
+        t.tic();
+        GaussianBlur_parallel(src, refImage);
+        times.push_back(t.toc());   //times[0]
+        t.tic();
         calculateSobelVectors(refImage);
+        times.push_back(t.toc());   //times[1]
         // Mat sobImage(src.rows, src.cols, CV_8UC1);
         // for(int x=0;x<src.cols;x++){
         //     for(int y=0;y<src.rows;y++){
@@ -342,15 +442,18 @@ void Paint(Mat src){
         // }
         // imwrite("sobtest.jpg", sobImage);
         paintLayer(canvas,refImage,Ri,paintArea);
+        printf("radius %d : blurring %10f, sobel %10f, diff %10f, strokpoint %10f, strokedetail %10f, drawstroke %10f\n\n", 
+                        Ri, times[0], times[1], times[2], times[3], times[4], times[5]);
+        times.clear();
     }
     imwrite("final_"+to_string(style)+".jpg", canvas);
 }  
 
 int main( int argc, char** argv )
 {
-    if( argc != 3)
+    if( argc != 4)
     {
-     cout <<" Usage: painterly_rendering <image_file> <paint_style:0~3>" << endl;
+     cout <<" Usage: painterly_rendering <image_file> <paint_style:0~3> <num_thread>" << endl;
      return -1;
     }
 
@@ -363,6 +466,8 @@ int main( int argc, char** argv )
         return -1;
     }
     style = atoi(argv[2]);
+    int numThreads = atoi(argv[3]); 
+    omp_set_num_threads(numThreads);
     setStyle();
     Paint(image);
 
