@@ -383,7 +383,7 @@ void paintLayer(Mat canvas,Mat refImage,int brushRadius,Mat paintArea){
     #pragma omp parallel
     {
         while(S.size()!=0) {
-            Point p0(-1,1);
+            Point p0(-1,-1);
             #pragma omp critical
             {
                 if(!S.empty()) {
@@ -391,6 +391,7 @@ void paintLayer(Mat canvas,Mat refImage,int brushRadius,Mat paintArea){
                     S.pop_back();
                 }
             }
+            if (p0.x<0||p0.x>=refImage.cols||p0.y<0||p0.y>=refImage.rows)   break;
             makeSplineStroke(canvas,p0,brushRadius,refImage,Diff,paintArea);
         }
     }
