@@ -232,15 +232,17 @@ float pointDiff(int i,int j, Mat Diff, Mat paintArea){
 
 void paintStroke(Mat canvas,Mat paintArea,vector<Point> K,Vec3b strokeColor, int R){
     if(K.size()==1){ // if there is one point in K, then draw a point
-        Mat temp_c = canvas.clone();
-        circle(temp_c, K[0], cvRound((double)R/2.0), Scalar(Vec3b(strokeColor)), -1);
-        addWeighted(temp_c,a,canvas,1-a,0,canvas); // alpha blending because openCV polylines does not support alpha channel
+        //Mat temp_c = canvas.clone();
+        //circle(temp_c, K[0], cvRound((double)R/2.0), Scalar(Vec3b(strokeColor)), -1);
+        circle(canvas, K[0], cvRound((double)R/2.0), Scalar(Vec3b(strokeColor)), -1);
+        //addWeighted(temp_c,a,canvas,1-a,0,canvas); // alpha blending because openCV polylines does not support alpha channel
         circle(paintArea, K[0], cvRound((double)R/2.0), Scalar(Vec3b(255,255,255)), -1); // paint white stroke onto paintArea
     }
     else{
-        Mat temp_c = canvas.clone();
-        polylines(temp_c, K, false, Scalar(Vec3b(strokeColor)), R);
-        addWeighted(temp_c,a,canvas,1-a,0,canvas); // alpha blending because openCV polylines does not support alpha channel
+        //Mat temp_c = canvas.clone();
+        //polylines(temp_c, K, false, Scalar(Vec3b(strokeColor)), R);
+        polylines(canvas, K, false, Scalar(Vec3b(strokeColor)), R);
+        //addWeighted(temp_c,a,canvas,1-a,0,canvas); // alpha blending because openCV polylines does not support alpha channel
         polylines(paintArea, K, false, Scalar(Vec3b(255,255,255)), R); // paint white stroke onto paintArea
     }
 }
@@ -378,10 +380,20 @@ void paintLayer(Mat canvas,Mat refImage,int brushRadius,Mat paintArea){
     random_shuffle(S.begin(),S.end()); // shuffle all strokes to random order
     times.push_back(t.toc());   //times[3]
     printf("stroke count %d ", S.size());
-    while(S.size()!=0){
-        Point p0 = S.back();
-        S.pop_back();
-        makeSplineStroke(canvas,p0,brushRadius,refImage,Diff,paintArea);
+    #pragma omp parallel
+    {
+        while(S.size()!=0) {
+            Point p0(-1,-1);
+            #pragma omp critical
+            {
+                if(!S.empty()) {
+                    p0 = S.back();
+                    S.pop_back();
+                }
+            }
+            if (p0.x<0||p0.x>=refImage.cols||p0.y<0||p0.y>=refImage.rows)   break;
+            makeSplineStroke(canvas,p0,brushRadius,refImage,Diff,paintArea);
+        }
     }
 }
 
