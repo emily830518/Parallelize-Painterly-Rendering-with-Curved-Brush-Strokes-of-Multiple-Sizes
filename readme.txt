@@ -8,3 +8,6 @@ Usage:
 	style 1: Expressionist
 	Style 2: Colorist Wash
 	Style 3: Pointillist 
+
+Output:
+	We save our output as final_<style>.jpg
